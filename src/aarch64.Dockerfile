@@ -12,12 +12,14 @@ RUN apt install --quiet --yes \
     llvm \
     git \
     libelf-dev \
+    libssl-dev \
     binutils-dev \
     libbpf-dev \
     libcap-dev \
-    wget
+    wget \
+    pkg-config
 
-RUN git clone --recurse-submodules https://github.com/libbpf/bpftool.git
+RUN git clone --recurse-submodules -b v7.3.0 https://github.com/libbpf/bpftool.git
 WORKDIR bpftool/src
 RUN make
 RUN make install
