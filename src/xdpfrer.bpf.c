@@ -157,7 +157,7 @@ static inline ulong bit_range(HST value, int from, int to) {
  * @param take_any is the TakeAny
  * @param rec is the sequence recovery struct that stores the SequenceHistory
  */
-static inline void set_hst(HST hst, uint64_t history_window, ushort recv_seq, bool take_any, struct seq_rcvy_and_hist *rec)
+static inline __attribute__((always_inline)) void set_hst(HST hst, uint64_t history_window, ushort recv_seq, bool take_any, struct seq_rcvy_and_hist *rec)
 {
     // Copy the history window into the hst
     for (int i = 0; i < SEQ_START_BIT; i++)
