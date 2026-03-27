@@ -1,206 +1,238 @@
-# XDP FRER
+>This revision incorporates the technical prerequisites, environment constraints, and specific kernel requirements necessary for a successful XDP/FRER integration. 
 
-This software is an experimental partial implementation of the IEEE 802.1CB Frame Replication and Elimination for Reliability standard.
-The implementation uses the XDP packet processing subsystem of the Linux kernel, which can be configured with BPF.
+# IEEE 802.1CB FRER: Linux XDP Physical Implementation Guide
 
-The details of the experiment are discussed in the following research paper:
+_This guide describes the deployment of Frame Replication and Elimination for Reliability (FRER) using XDPFRER from Ericson. It covers the environment requirements, path configuration, and execution of the redundancy logic._
 
-__Lightweight Implementation of Per-packet Service Protection in eBPF/XDP__ ([pdf](https://netdevconf.info/0x17/docs/netdev-0x17-paper25-talk-paper.pdf) | [arxiv](https://arxiv.org/abs/2312.07152) | [slides](https://netdevconf.info/0x17/docs/netdev-0x17-paper25-talk-slides/netdev0x17_xdpfrer_slides.pdf))
+## 1. System Requirements and Prerequisites
 
-Cite as:
+Successful XDP integration requires specific kernel features and hardware configurations. Use the following checklist to verify the environment.
 
+### Operating System and Kernel 
+
+- OS: Ubuntu 24.04 LTS or Debian 12 (Recommended)
+- Kernel Version: 5.15 or higher. 
+- XDP generic mode support and BPF CO-RE (Compile Once – Run Everywhere) require modern kernel headers
+
+- Kernel Configuration: Verify that the following flags are enabled in the kernel config `(usually found in /boot/config-$(uname -r))`:
 ```
-@misc{fejes2023lightweight,
-      title={Lightweight Implementation of Per-packet Service Protection in eBPF/XDP}, 
-      author={Ferenc Fejes and Ferenc Orosi and Balázs Varga and János Farkas},
-      booktitle={Netdev 0x17, THE Technical Conference on Linux Networking},
-      year={2023},
-      eprint={2312.07152},
-      archivePrefix={arXiv},
-      primaryClass={cs.NI},
-      url={https://netdevconf.info/0x17/25}
-}
-```
-
-## Requirements
-
-Debian based GNU/Linux distribution is preferred.
-Tested with Debian Bookworm and Ubuntu 23.04, 23.10.
-
-```
-sudo apt install build-essential gcc-multilib clang llvm linux-tools-common bpftool libbpf-dev
+CONFIG_BPF_SYSCALL=y
+CONFIG_DEBUG_INFO_BTF=y (Required for CO-RE/Libbpf)
+CONFIG_XDP_SOCKETS=y
 ```
 
-**Note: libbpf version must be at least 1.3.0 on Ubuntu 23.04.**
+### Hardware and Drivers
 
-## Building
+- Ethernet: 
+    * XDP-compatible NICs are preferred for native performance. 
+    * For USB-to-Ethernet adapters (e.g., cdc_ncm), compile the binary in Generic XDP mode
 
-```
-cd src
-make
-```
+- Wireless: 
+    * Standard 802.11 managed mode is used via **VXLAN** 
+    * Ensure the wireless driver supports high MTU if large encapsulated frames are expected.
 
-Static build is also available:
-```
-cd src
-make static
-```
-
-To build for aarch64, build the Docker image and run it. The binary xdpfrer is presented in the /tmp folder. We can copy the binary file back to our computer from the running Docker container.
-```
-docker build -f aarch64.Dockerfile -t xdpfrer .
-docker run -it --name xdpfrer xdpfrer /bin/bash
-docker cp xdpfrer:/tmp/src/xdpfrer .
-```
-
-## Argument list
+### Development Toolchain
+Required for compiling the BPF program and linking against libbpf.
 
 ```
-Usage: xdpfrer [OPTION...]
-
-  -e, --egress=WORD          Egress interface in IFNAME:VID format (Required)
-  -i, --ingress=WORD         Ingress interface in IFNAME:VID format (Required)
-  -m, --mode=WORD            Mode: repl or elim (Required)
-  -n, --not                  Not adding or removing R-tag. (Optional)
-  -q, --quiet                Quiet output. (Optional)
-  -?, --help                 Give this help list
-      --usage                Give a short usage message
+sudo apt update && sudo apt install -y \
+    clang \ 
+    llvm \
+    gcc-multilib \
+    build-essential \
+    libelf-dev \
+    libbpf-dev \
+    linux-headers-$(uname -r)
 ```
 
-__Important:__ if multiple `--egress` used, mode must be replication (`--mode=repl`) and only one `--ingress` interface can be set.
-Similarly, if the mode is elimination (`-m elim`), multiple `--ingress` but only one `--egress` parameter are allowed.
-
-For example in the `xdpfrer -m repl -i beth0:20 -e enp4s0:66 -e enp7s0:67` command can be interpreted as:
-Packets with VLAN ID `20` on the `beth0` interface are replicated to `enp4s0` and `enp7s0` interfaces with VLAN ID `66` and `67` respectively.
-
-## Source
+### Operational Utilities
+Required for network configuration, hardware discovery, and frame analysis.
 
 ```
-.
-├── README.md
-├── src
-│   ├── common.h        // basic data structures and defines
-│   ├── Makefile        // GNU make file
-│   ├── xdpfrer.bpf.c   // XDP programs and BPF map definitions
-│   └── xdpfrer.c       // configure and load the BPF part to the kernel
-└── test
-    ├── measurement.py  // All-in-one testing and plotting script
-    ├── physical.env    // Network config/environment for real testbed
-    └── veth.env        // Full network config for veth/namespace based testbed
+sudo apt install -y \
+    iproute2 \
+    tcpdump \
+    bridge-utils \
+    arptables \
+    arping \
+    net-tools
 ```
 
-## Environment:
+## 2. Environment Preparation
 
-`physical.env` and `veth.env` contains this environment. Obviously you can modify vlans when you start running xdpfrer instances.
-
-```
-                    ┌───────────────────────────────────────────────────┐                    
-                    │                        nsx                        │                    
-                    │                                                   │                    
-                    │┌──────────┬────────┐         ┌────────┬──────────┐│                    
-┌─────────────┐     ││          │ enp3s0 ├────55───▶ enp4s0 │          ││     ┌─────────────┐
-│      tx     │     ││          │        ◀────66───┐        │          ││     │      lx     │
-│    ┌────────┤     │├────────┐ └────────┤         ├────────┘ ┌────────┤│     ├────────┐    │
-│    │  teth0 ◀━━10━┿▶  aeth0 │          │         │          │  beth0 ◀┿━20━━▶  leth0 │    │
-│    │10.0.0.1│     │├────────┘ ┌────────┤         ├────────┐ └────────┤│     │10.0.0.2│    │
-│    └────────┤     ││          │ enp6s0 ├────56───▶ enp7s0 │          ││     ├────────┘    │
-└─────────────┘     ││          │        ◀────67───┐        │          ││     └─────────────┘
-                    │└──────────┴────────┘         └────────┴──────────┘│                    
-                    │                                                   │                    
-                    └───────────────────────────────────────────────────┘                    
-```
-
-## Usage
-
-For basic usage a GNU/Linux system required with BPF and XDP support.
-
-1. Open some terminal and source the `env` file which configure the whole network: network namespaces acting as talker, switch and listener, including the virtual interfaces and links.
-2. Run the `xdpfrer` instances inside the switch namespace (use the `nsx` alias)
-3. Open up another root terminal, source the `env` file, and start a ping command from talker to listener
-4. If everything OK, the ping successful and the XDP forwarding works properly
-5. To cleanup, press `Ctrl+D` or type `exit` to exit from terminals. The last terminal cleanup the environment
-
-The commands:
+### Hardware Address Discovery
+> FRER replication requires explicit destination MAC addresses to ensure frames are steered correctly across the Layer 2 segments.
 
 ```
-# 1.
-cd test
-sudo su
-source veth.env
+# Identify MAC addresses for all physical and virtual interfaces
+# Run on both Talker and Listener:
+ip link show
 ```
 
+> VXLAN requires the specific IP addresses of the physical wireless adapters to define the tunnel endpoints. Use the following commands to identify the current IP assignments.
 ```
-# 2.1 (tx -> lx)
-nsx ../src/xdpfrer -m repl -i aeth0:10 -e enp3s0:55 -e enp6s0:56
-nsx ../src/xdpfrer -m elim -i enp4s0:55 -i enp7s0:56 -e beth0:20
-
-# 2.2 (lx -> tx)
-nsx ../src/xdpfrer -m repl -i beth0:20 -e enp4s0:66 -e enp7s0:67
-nsx ../src/xdpfrer -m elim -i enp3s0:66 -i enp6s0:67 -e aeth0:10
+# Locate the wireless interface (usually starts with 'wlan' or 'wlx')
+# and identify the IPv4 address (inet)
+ip -4 addr show scope global
 ```
+Record the IP of the Talker (e.g., 192.168.0.194) and the Listener (e.g., 192.168.0.153). These will be used in the VXLAN local and remote parameters during Path Configuration.
 
+### Connectivity Verification
 ```
-# 3.
-cd test
-sudo su
-source veth.env
-
-tx ping 10.0.0.2 -c 4
-#  PING 10.0.0.2 (10.0.0.2) 56(84) bytes of data.
-#  64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.044 ms
-#  64 bytes from 10.0.0.2: icmp_seq=2 ttl=64 time=0.056 ms
-#  64 bytes from 10.0.0.2: icmp_seq=3 ttl=64 time=0.055 ms
-#  64 bytes from 10.0.0.2: icmp_seq=4 ttl=64 time=0.057 ms
+# From the Talker, ping the Listener's wireless IP
+ping -c 4 <LISTENER_WIFI_IP>
 ```
 
-```
-# 4.
-#  (veth.env) root:test# nsx ../src/xdpfrer -m repl -i aeth0:10 -e enp3s0:55 -e enp6s0:56
-#  Config replication on interface aeth0 (ifindex: 2) match vlan 10
-#  Received packets: 0
-#  Received packets: 1
-#  Received packets: 2
-#  Received packets: 3
-#  Received packets: 4
-#  Received packets: 4
-#  Received packets: 4
+### Memory Locking (RLIMIT_MEMLOCK)
+BPF maps require pinned memory. On many systems, the default limit for locked memory is too low for FRER history tables.
 
-#  (veth.env) root:test# nsx ../src/xdpfrer -m elim -i enp4s0:55 -i enp7s0:56 -e beth0:20
-#  Config recovery on iface enp4s0 (ifindex: 3) match vlan 20
-#  Config recovery on iface enp7s0 (ifindex: 5) match vlan 20
-#  Passed 0, Dropped 0
-#  Passed 1, Dropped 1
-#  Passed 2, Dropped 2
-#  Passed 3, Dropped 3
-#  Passed 4, Dropped 4
-#  Passed 4, Dropped 4
+Set memlock limit to unlimited for the current session
+``` 
+ulimit -l unlimited
 ```
+### Disable RP Filter to allow multi-path ingress
 
 ```
-# 5.
-Ctrl+C # in xdpfrer terminal
-Ctrl+D # in both terminal
+sudo sysctl -w net.ipv4.conf.all.rp_filter=0
+sudo sysctl -w net.ipv4.conf.default.rp_filter=0
 ```
 
-## Measurements:
+## 3. Path Configuration 
 
-For advanced usage, take a look at the test/measurement.py script. It is possible to run XDP FRER on a real, physical testbed, just change the interface names and VLAN IDs and the script accordingly.
+### Ingress, VLAN, Egress
 
-First, run common tests or error tests:
+>This is the interface your application must talk to (for example ping)
 ```
-python3 measurement.py test
-or
-python3 measurement.py error
-```
-
-After that, generate `txt` files from `pcap` files:
-```
-python3 measurement.py data
+# Create Ingress Interface (The Replicator's Entrance)
+sudo ip link add aeth0 type veth peer name teth0
+sudo ip link set dev aeth0 up
+sudo ip link set dev teth0 up
 ```
 
-Last but not least, generate plots:
+>This is where the packets get the vlan tag
 ```
-python3 measurement.py plot
+sudo ip link add link teth0 name teth0.100 type vlan id 100
+sudo ip link set dev teth0.100 up
+sudo ip addr add 10.0.0.1/24 dev teth0.100
 ```
 
-With questions regarding usage, bugs and evaluation, please contact [Ferenc Fejes \<ferenc.fejes@ericsson.com\>](mailto:ferenc.fejes@ericsson.com).
+>This is where your receiving application can listen
+```
+sudo ip link add elim_out type veth peer name clean_in
+sudo ip link set dev elim_out up
+sudo ip link set dev clean_in up
+
+# Assign the Listener's test IP to the clean delivery interface
+sudo ip addr add 10.0.0.2/24 dev clean_in
+```
+
+
+### Ethernet (Path A)
+Direct XDP attachment to USB drivers often fails due to missing ndo_xdp_xmit support. Resolve this via a **veth bridge relay**
+
+#### Egress path
+```
+sudo ip link add exit_in_eth type veth peer name exit_out_eth
+sudo ip link set dev exit_in_eth up
+sudo ip link set dev exit_out_eth up
+```
+
+#### Create bridge and attach physical interface
+
+```
+# Create and assemble the bridge
+sudo brctl addbr frer_bridge_eth
+sudo brctl addif frer_bridge_eth exit_out_eth
+sudo brctl addif frer_bridge_eth <PHYSICAL_ETH_IFACE>
+
+# Disable MAC learning (Hub mode)
+sudo brctl setageing frer_bridge_eth 0
+sudo brctl stp frer_bridge_eth off
+
+# Force flooding on the member ports
+## This ensures the bridge doesn't silently drop non-IP/unknown unicast frames
+sudo bridge link set dev exit_out_eth learning off flood on
+sudo bridge link set dev <PHYSICAL_ETH_IFACE> learning off flood on
+
+sudo ip link set dev frer_bridge_eth up
+```
+
+### Wireless (Path B)
+> To integrate the wireless path successfully into an IEEE 802.1CB FRER architecture, the primary challenge is the transparency of the medium. Standard 802.11 Access Points (APs) are designed to bridge Ethernet and IP traffic; they typically discard frames with unknown Ethertypes like 0xf1c1.
+
+VXLAN (Virtual eXtensible LAN) encapsulates the L2 FRER frame inside a standard Layer 3 UDP/IP packet.
+
+#### Talker Configuration:
+```
+sudo ip link add vxlan0 type vxlan id 100 \
+    remote <LISTENER_WIFI_IP> \
+    local <TALKER_WIFI_IP> \
+    dstport 4789 \
+    dev <WIFI_IFACE>
+
+sudo ip link set dev vxlan0 up
+```
+
+#### Listener Configuration:
+```
+sudo ip link add vxlan0 type vxlan id 100 \
+    remote <TALKER_WIFI_IP> \
+    local <LISTENER_WIFI_IP> \
+    dstport 4789 \
+    dev <WIFI_IFACE>
+
+sudo ip link set dev vxlan0 up
+```
+
+### ARP Table
+>Since the interfaces are now initialized and the IP addresses are discovered, we can proceed with the Static ARP Configuration. This step is critical because standard ARP requests (Broadcast) may not behave predictably across the XDP-enabled FRER paths, especially when bypassing the kernel's normal IP stack
+
+#### On the Talker
+Target the Listener's IP on the test network (10.0.0.2) and bind it to the Listener's physical MAC address.
+
+```
+# Associate the Listener's IP with its hardware MAC on the VLAN interface
+sudo arp -s 10.0.0.2 <LISTENER_PHYSICAL_MAC> -i teth0.100
+```
+
+#### On the Listener 
+Target the Talker's IP on the test network (10.0.0.1) and bind it to the Talker's physical MAC address.
+
+```
+# Associate the Talker's IP with its hardware MAC on the VLAN interface
+sudo arp -s 10.0.0.1 <TALKER_PHYSICAL_MAC> -i leth0.100
+```
+
+#### Verification of Neighbor State
+Ensure the entries are marked as PERM (Permanent) or have the CM flag, indicating they will not expire or be overwritten by the kernel.
+
+```
+# Display the ARP table for the specific FRER interface
+arp -n -i teth0.100
+Expected Output:
+Address        HWtype  HWaddress           Flags Mask  Iface
+10.0.0.2       ether   2c:cf:67:32:4f:9a   CM          teth0.100
+```
+
+## FRER Deployment
+### Replicator Execution (Talker)
+The Replicator sits at the ingress of the pipeline. It intercepts standard traffic arriving from the application interface, clones it, applies the FRER R-TAG and VLAN tag, and egresses the duplicates across Path A and Path B.
+
+```
+# Ingress: aeth0 (Intersects traffic from teth0.100)
+# Egress 1: exit_in_eth (Path A Relay)
+# Egress 2: vxlan0 (Path B Wireless Tunnel)
+# Tag: 100
+sudo ./xdpfrer -m repl -i aeth0:100 -e exit_in_eth:100 -e vxlan0:100
+```
+
+### Eliminator Execution (Listener)
+The Eliminator attaches to both physical and virtual ingress points. It maintains a history of sequence numbers; if a sequence number has already been processed, the duplicate is dropped. Valid packets are stripped of FRER headers and sent to the "Clean" interface.
+
+```
+# Ingress 1: eth0:100 (Straight from ethernet on path A)
+# Ingress 2: vxlan0:100 (Path B wireless tunnel)
+# Egress: 
+sudo ./xdpfrer -m elim -i eth0:100 -i vxlan0:100 -e elim_out:100 &
+
+```

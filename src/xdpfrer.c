@@ -35,7 +35,7 @@ enum xdp_attach_mode {
 	XDP_MODE_HW
 };
 
-enum xdp_attach_mode attach_mode = XDP_MODE_NATIVE;
+enum xdp_attach_mode attach_mode = XDP_MODE_SKB;
 
 enum FRER {
     FRER_RCVY, // elimination

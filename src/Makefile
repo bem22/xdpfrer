@@ -1,3 +1,4 @@
+BPFTOOL := /usr/lib/linux-tools-6.8.0-106/bpftool
 CFLAGS=-Wall -Wextra -Wshadow -Wstrict-prototypes -Wmissing-declarations -Wwrite-strings -Werror
 CC=clang
 
@@ -14,13 +15,13 @@ all: xdpfrer
 static: xdpfrer
 
 vmlinux.h:
-	sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+	sudo $(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 
 xdpfrer.bpf.o: xdpfrer.bpf.c vmlinux.h common.h
 	$(CC) -g -O2 -target bpf $(TARGET) -c $< -o $@
 
 xdpfrer.skel.h: xdpfrer.bpf.o
-	sudo bpftool gen skeleton $^ > $@
+	sudo $(BPFTOOL) gen skeleton $^ > $@
 
 xdpfrer.o: xdpfrer.c xdpfrer.skel.h common.h
 	$(CC) $(STATIC) -g -O2 $(CFLAGS) -c $< -o $@

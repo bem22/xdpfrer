@@ -372,35 +372,52 @@ int check_reset(char *dummy) // unused param to satisfy verifier
     return 1;
 }
 
-
 SEC("xdp")
 int replicate(struct xdp_md *pkt)
 {
-    __sync_fetch_and_add(&packets_seen, 1); // prevent race condition when increment the counter
+    __sync_fetch_and_add(&packets_seen, 1); 
+
+    bpf_printk("XDPFRER: Caught a packet!\n");
+
     void *data = (void *)(long) pkt->data;
     void *data_end = (void *)(long) pkt->data_end;
-    if (data + ethhdr_sz + vlanhdr_sz > data_end)
+    
+    if (data + ethhdr_sz + vlanhdr_sz > data_end) {
+        bpf_printk("XDPFRER: DROP - Packet too short (Bounds check)\n");
         return XDP_DROP;
+    }
 
     int vid = get_vlan_id(pkt);
-    if (vid < 0)
+
+    bpf_printk("XDPFRER: Parsed VLAN ID is: %d\n", vid);
+
+    if (vid < 0) {
+        bpf_printk("XDPFRER: DROP - Missing or invalid VLAN tag.\n");
         return XDP_DROP;
+    }
 
     struct seq_gen *gen = bpf_map_lookup_elem(&seqgen_map, &vid);
-    if (!gen)
+    if (!gen) {
+        bpf_printk("XDPFRER: DROP - VLAN %d not found in seqgen_map!\n", vid);
         return XDP_DROP;
+    }
 
     if (add_or_rm_rtag) {
         uint16_t seq = gen_seq(gen);
         int ret = add_rtag(pkt, &seq);
-        if (ret < 0)
+        if (ret < 0) {
+            bpf_printk("XDPFRER: DROP - Failed to add R-Tag! Code: %d\n", ret);
             return XDP_DROP;
+        }
     }
 
     struct tx_ifaces *tx = bpf_map_lookup_elem(&replicate_tx_map, &vid);
-    if (!tx)
+    if (!tx) {
+        bpf_printk("XDPFRER: DROP - VLAN %d not found in tx map!\n", vid);
         return XDP_DROP;
+    }
 
+    bpf_printk("XDPFRER: SUCCESS! Redirecting VLAN %d to devmap.\n", vid);
     return bpf_redirect_map(tx, 0, BPF_F_BROADCAST | BPF_F_EXCLUDE_INGRESS);
 }
 
