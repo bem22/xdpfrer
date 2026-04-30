@@ -511,6 +511,7 @@ int main(int argc, char* argv[])
         goto end;
     }
     skel->data->add_or_rm_rtag = add_or_rm_rtag;
+    skel->data->broadcast_mode = (egress_size > 1);
 
     ret = config_frer(skel);
     if (ret < 0) {

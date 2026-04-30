@@ -84,6 +84,7 @@ volatile int packets_seen = 0;
 volatile int dropped = 0;
 volatile int passed = 0;
 volatile bool add_or_rm_rtag = true;
+volatile bool broadcast_mode = true;
 
 /**
  * @brief Generates a sequence number between 0 and 65535. If it reaches 65535 then start from 0 again.
@@ -418,7 +419,7 @@ int replicate(struct xdp_md *pkt)
     }
 
     bpf_printk("XDPFRER: SUCCESS! Redirecting VLAN %d to devmap.\n", vid);
-    return bpf_redirect_map(tx, 0, BPF_F_BROADCAST | BPF_F_EXCLUDE_INGRESS);
+    return bpf_redirect_map(tx, 0, broadcast_mode ? (BPF_F_BROADCAST | BPF_F_EXCLUDE_INGRESS) : 0);
 }
 
 SEC("xdp/devmap")
