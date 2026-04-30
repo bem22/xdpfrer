@@ -358,7 +358,12 @@ static inline int change_vlan(const struct xdp_md *pkt, int ifindex, bool replic
     if (!vte)
         return 0;
 
-    if (old_vid == vte->from) {
+    if (replication) {
+        // In SKB mode, broadcast clones may share packet data, so
+        // a prior postprocessing call may have already changed the VID.
+        // Just set the target VID unconditionally.
+        vhdr->h_vlan_TCI = bpf_htons(vte->to);
+    } else if (old_vid == vte->from) {
         vhdr->h_vlan_TCI = bpf_htons(vte->to);
     } else {
         return -1;
