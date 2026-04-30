@@ -425,10 +425,14 @@ int replicate(struct xdp_md *pkt)
 SEC("xdp/devmap")
 int replicate_postprocessing(struct xdp_md *pkt)
 {
+    bpf_printk("XDPFRER: postproc egress_ifindex=%d\n", pkt->egress_ifindex);
     int ret = change_vlan(pkt, pkt->egress_ifindex, true);
-    if (ret < 0)
+    if (ret < 0) {
+        bpf_printk("XDPFRER: postproc DROP (change_vlan failed)\n");
         return XDP_DROP;
+    }
 
+    bpf_printk("XDPFRER: postproc PASS egress_ifindex=%d\n", pkt->egress_ifindex);
     return XDP_PASS;
 }
 
