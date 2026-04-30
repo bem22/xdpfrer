@@ -175,12 +175,29 @@ int main(int argc, char *argv[])
         .msg_controllen = sizeof(ctrl_buf),
     };
 
+    /* idle timeout: stop if no packet arrives for 2 seconds after the last one */
+    const int idle_timeout_ms = 2000;
+    int idle_elapsed_ms = 0;
+    const int recv_timeout_ms = 100; /* matches SO_RCVTIMEO above */
+
     while (keep_running) {
         msg.msg_controllen = sizeof(ctrl_buf); /* reset each iteration */
 
         ssize_t n = recvmsg(sockfd, &msg, 0);
-        if (n < 0)
-            continue; /* timeout */
+        if (n < 0) {
+            /* timeout — check if we should stop due to idle */
+            if (received_count > 0) {
+                idle_elapsed_ms += recv_timeout_ms;
+                if (idle_elapsed_ms >= idle_timeout_ms) {
+                    printf("No packet received for %d ms, stopping.\n",
+                           idle_timeout_ms);
+                    break;
+                }
+            }
+            continue;
+        }
+
+        idle_elapsed_ms = 0; /* reset on every received packet */
 
         /* ── Determine receive timestamp ── */
         struct timespec recv_ts;
