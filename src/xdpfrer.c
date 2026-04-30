@@ -166,7 +166,7 @@ static int configure_replication(struct xdpfrer_bpf *frer, struct frer_config_it
     snprintf(mapname, BPF_OBJ_NAME_LEN, "vid%d_txifs", cfg->match_vlan);
     // Construct a map with all the replication egress interfaces
     int tx_ifaces_map_fd = bpf_map_create(
-        BPF_MAP_TYPE_DEVMAP_HASH,
+        BPF_MAP_TYPE_DEVMAP,
         mapname, sizeof(int),
         sizeof(struct bpf_devmap_val),
         max_tx_ifaces, 0

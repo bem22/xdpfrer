@@ -30,7 +30,7 @@ struct {
 
 // UNI VLAN ---> Replication TX interfaces (devmap)
 struct tx_ifaces { //helper for the verifier
-    __uint(type, BPF_MAP_TYPE_DEVMAP_HASH);
+    __uint(type, BPF_MAP_TYPE_DEVMAP);
     __uint(max_entries, 8);
     __uint(key_size, sizeof(int));
     __uint(value_size, sizeof(struct bpf_devmap_val));
