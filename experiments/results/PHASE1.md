@@ -14,7 +14,7 @@ Custom `sender`/`receiver` — pure unidirectional UDP, no handshake, compatible
 
 ## Traffic
 
-`sender -d 2000` (2ms interval → 500 pkt/s), 10,000 packets per run for statistical significance.
+`sender -d 1000` (1000ms interval → 1000 pkt/s), 10,000 packets per run for statistical significance.
 
 ---
 
